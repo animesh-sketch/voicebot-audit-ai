@@ -3,12 +3,11 @@ pages/dashboard.py — Main SaaS dashboard with platform overview,
 Plotly charts, and quick-access campaign cards.
 """
 import plotly.graph_objects as go
-import plotly.express as px
 import pandas as pd
 import streamlit as st
 
 from database.db_manager import (
-    get_all_campaigns, get_campaign_progress, get_platform_stats,
+    get_all_campaigns, get_campaign_progress, get_stats_for_campaigns,
     get_failures_for_campaign, get_campaign_insights,
 )
 from database.models import (
@@ -40,8 +39,72 @@ def _base_layout(title: str, h: int = 380) -> dict:
 def render():
     page_header("🏠 Platform Dashboard", "Real-time overview of all VoiceBot audit campaigns")
 
-    stats = get_platform_stats()
-    campaigns = get_all_campaigns()
+    all_campaigns = get_all_campaigns()
+
+    # ── Filter Bar ────────────────────────────────────────────────
+    all_clients  = sorted({c["client_name"] for c in all_campaigns if c.get("client_name")})
+    all_statuses = ["ACTIVE", "IN_PROGRESS", "READY_TO_CLOSE", "CLOSED"]
+
+    with st.container():
+        st.markdown(
+            "<div style='background:#EBF5FB;border:1px solid #AED6F1;border-radius:8px;"
+            "padding:0.8rem 1rem 0.4rem;margin-bottom:1rem;'>",
+            unsafe_allow_html=True,
+        )
+        fc1, fc2, fc3, fc4 = st.columns([2.2, 2, 2, 1])
+        with fc1:
+            sel_clients = st.multiselect(
+                "👤 Client", all_clients,
+                placeholder="All clients",
+                key="dash_filter_clients",
+            )
+        with fc2:
+            sel_statuses = st.multiselect(
+                "📌 Status", all_statuses,
+                placeholder="All statuses",
+                key="dash_filter_statuses",
+            )
+        with fc3:
+            search = st.text_input(
+                "🔍 Search", placeholder="Campaign or client name…",
+                key="dash_filter_search",
+            )
+        with fc4:
+            st.markdown("<br>", unsafe_allow_html=True)
+            if st.button("✖ Clear Filters", use_container_width=True, key="dash_clear_filters"):
+                for k in ("dash_filter_clients", "dash_filter_statuses", "dash_filter_search"):
+                    if k in st.session_state:
+                        del st.session_state[k]
+                st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    # Apply filters
+    campaigns = all_campaigns
+    if sel_clients:
+        campaigns = [c for c in campaigns if c.get("client_name") in sel_clients]
+    if sel_statuses:
+        campaigns = [c for c in campaigns if c["status"] in sel_statuses]
+    if search:
+        q = search.strip().lower()
+        campaigns = [
+            c for c in campaigns
+            if q in c["campaign_name"].lower() or q in (c.get("client_name") or "").lower()
+        ]
+
+    # Filtered result label
+    if sel_clients or sel_statuses or search:
+        st.markdown(
+            f"<div style='font-size:0.82rem;color:#5D6D7E;margin-bottom:0.6rem;'>"
+            f"Showing <b>{len(campaigns)}</b> of <b>{len(all_campaigns)}</b> campaigns"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+    camp_ids = [c["campaign_id"] for c in campaigns]
+    stats = get_stats_for_campaigns(camp_ids) if camp_ids else {
+        "campaigns": 0, "active": 0, "closed": 0,
+        "total_calls": 0, "audited": 0, "failures": 0, "avg_score": 0.0,
+    }
 
     # ── KPI row ───────────────────────────────────────────────────
     c1, c2, c3, c4, c5, c6 = st.columns(6)
@@ -62,8 +125,7 @@ def render():
     col_left, col_right = st.columns([3, 2])
 
     with col_left:
-        section_header("📊 Failure Distribution (All Campaigns)")
-        # Aggregate failure types
+        section_header("📊 Failure Distribution")
         fail_agg: dict[str, int] = {}
         for camp in campaigns:
             fails = get_failures_for_campaign(camp["campaign_id"])
@@ -76,23 +138,24 @@ def render():
                 {"Failure Type": k.replace(" Failure", "").replace(" Detection", ""), "Count": v}
                 for k, v in sorted(fail_agg.items(), key=lambda x: -x[1])
             ])
-            bar_colors = [FAILURE_TYPE_COLORS.get(k, "#95A5A6") for k in fail_agg]
             fig = go.Figure(go.Bar(
                 x=df_fail["Count"], y=df_fail["Failure Type"],
                 orientation="h",
-                marker_color=[FAILURE_TYPE_COLORS.get(k + " Failure", FAILURE_TYPE_COLORS.get(k, "#95A5A6"))
-                              for k in (df_fail["Failure Type"] + " Failure").tolist()],
+                marker_color=[
+                    FAILURE_TYPE_COLORS.get(k + " Failure", FAILURE_TYPE_COLORS.get(k, "#95A5A6"))
+                    for k in (df_fail["Failure Type"] + " Failure").tolist()
+                ],
                 text=df_fail["Count"], textposition="outside",
                 hovertemplate="%{y}: %{x}<extra></extra>",
             ))
             fig.update_layout(**_base_layout("", 360), xaxis_title="Count", yaxis_title="")
             st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
         else:
-            st.info("No failure data yet. Close a campaign to run the intelligence engine.")
+            st.info("No failure data for the selected filters.")
 
     with col_right:
         section_header("📋 Campaign Status Breakdown")
-        status_counts = {}
+        status_counts: dict[str, int] = {}
         for c in campaigns:
             s = c["status"]
             status_counts[s] = status_counts.get(s, 0) + 1
@@ -110,13 +173,13 @@ def render():
                                margin=dict(l=20, r=20, t=30, b=20))
             st.plotly_chart(fig2, use_container_width=True, config={"displayModeBar": False})
         else:
-            st.info("No campaigns yet.")
+            st.info("No campaigns match the selected filters.")
 
     # ── Lead classification aggregate ─────────────────────────────
     col_ll, col_lr = st.columns(2)
 
     with col_ll:
-        section_header("🎯 Lead Classification (Platform-wide)")
+        section_header("🎯 Lead Classification")
         all_leads: dict[str, int] = {}
         for camp in campaigns:
             ins = get_campaign_insights(camp["campaign_id"])
@@ -172,14 +235,17 @@ def render():
 
     # ── Campaigns table ───────────────────────────────────────────
     st.markdown("<br>", unsafe_allow_html=True)
-    section_header("📋 All Campaigns")
+    section_header("📋 Campaigns")
 
     if not campaigns:
-        info_banner("No campaigns yet", "Create your first campaign to get started.")
-        col_q1, col_q2 = st.columns(2)
-        with col_q1:
-            if st.button("➕ Create Campaign", type="primary", use_container_width=True):
-                nav("campaigns")
+        if sel_clients or sel_statuses or search:
+            info_banner("No results", "Try adjusting or clearing your filters.")
+        else:
+            info_banner("No campaigns yet", "Create your first campaign to get started.")
+            col_q1, _ = st.columns(2)
+            with col_q1:
+                if st.button("➕ Create Campaign", type="primary", use_container_width=True):
+                    nav("campaigns")
         return
 
     for camp in campaigns:

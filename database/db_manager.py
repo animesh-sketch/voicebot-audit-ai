@@ -454,6 +454,48 @@ def get_campaign_insights(campaign_id: str) -> dict | None:
 
 # ─────────────────────────── Cross-campaign stats ────────────────
 
+def get_stats_for_campaigns(campaign_ids: list[str]) -> dict:
+    """Return aggregated stats for a specific subset of campaigns."""
+    if not campaign_ids:
+        return {"campaigns": 0, "active": 0, "closed": 0,
+                "total_calls": 0, "audited": 0, "failures": 0, "avg_score": 0.0}
+    placeholders = ",".join("?" * len(campaign_ids))
+    with _conn() as con:
+        active = con.execute(
+            f"SELECT COUNT(*) FROM campaigns WHERE campaign_id IN ({placeholders}) AND status != 'CLOSED'",
+            campaign_ids,
+        ).fetchone()[0]
+        closed = con.execute(
+            f"SELECT COUNT(*) FROM campaigns WHERE campaign_id IN ({placeholders}) AND status = 'CLOSED'",
+            campaign_ids,
+        ).fetchone()[0]
+        total_calls = con.execute(
+            f"SELECT COUNT(*) FROM calls WHERE campaign_id IN ({placeholders})",
+            campaign_ids,
+        ).fetchone()[0]
+        audited = con.execute(
+            f"SELECT COUNT(*) FROM audit_results WHERE campaign_id IN ({placeholders})",
+            campaign_ids,
+        ).fetchone()[0]
+        failures = con.execute(
+            f"SELECT COUNT(*) FROM bot_failures WHERE campaign_id IN ({placeholders})",
+            campaign_ids,
+        ).fetchone()[0]
+        avg_score = con.execute(
+            f"SELECT AVG(percentage_score) FROM audit_results WHERE campaign_id IN ({placeholders})",
+            campaign_ids,
+        ).fetchone()[0] or 0
+    return {
+        "campaigns": len(campaign_ids),
+        "active": active,
+        "closed": closed,
+        "total_calls": total_calls,
+        "audited": audited,
+        "failures": failures,
+        "avg_score": round(avg_score, 2),
+    }
+
+
 def get_platform_stats() -> dict:
     with _conn() as con:
         campaigns  = con.execute("SELECT COUNT(*) FROM campaigns").fetchone()[0]
