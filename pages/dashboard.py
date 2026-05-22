@@ -19,20 +19,24 @@ from utils import (
 )
 
 # ── Colour helpers ────────────────────────────────────────────────
-_BG    = "#F4F6F9"
-_DARK  = "#1C2833"
-_BLUE  = "#2980B9"
-_GREEN = "#27AE60"
-_RED   = "#E74C3C"
-_AMBER = "#F39C12"
+_BG    = "#0D1424"
+_DARK  = "#E2E8F0"
+_BLUE  = "#0EA5E9"
+_GREEN = "#00D68F"
+_RED   = "#F472B6"
+_AMBER = "#FBBF24"
+_SKY   = "#38BDF8"
+_PINK  = "#EC4899"
 
 
 def _base_layout(title: str, h: int = 380) -> dict:
     return dict(
-        title=dict(text=title, font=dict(size=14, color=_DARK)),
-        paper_bgcolor="white", plot_bgcolor=_BG,
+        title=dict(text=title, font=dict(size=14, color=_SKY)),
+        paper_bgcolor="#0D1424", plot_bgcolor="#080F1C",
         height=h, margin=dict(l=40, r=20, t=45, b=30),
-        font=dict(family="Inter, sans-serif", size=11, color=_DARK),
+        font=dict(family="Inter, sans-serif", size=11, color="#94A3B8"),
+        xaxis=dict(gridcolor="rgba(56,189,248,0.08)", linecolor="rgba(56,189,248,0.15)"),
+        yaxis=dict(gridcolor="rgba(56,189,248,0.08)", linecolor="rgba(56,189,248,0.15)"),
     )
 
 
@@ -47,7 +51,7 @@ def render():
 
     with st.container():
         st.markdown(
-            "<div style='background:#EBF5FB;border:1px solid #AED6F1;border-radius:8px;"
+            "<div style='background:rgba(14,165,233,0.06);border:1px solid rgba(56,189,248,0.15);border-radius:12px;"
             "padding:0.8rem 1rem 0.4rem;margin-bottom:1rem;'>",
             unsafe_allow_html=True,
         )
@@ -94,7 +98,7 @@ def render():
     # Filtered result label
     if sel_clients or sel_statuses or search:
         st.markdown(
-            f"<div style='font-size:0.82rem;color:#5D6D7E;margin-bottom:0.6rem;'>"
+            f"<div style='font-size:0.82rem;color:#64748B;margin-bottom:0.6rem;'>"
             f"Showing <b>{len(campaigns)}</b> of <b>{len(all_campaigns)}</b> campaigns"
             f"</div>",
             unsafe_allow_html=True,
@@ -108,11 +112,11 @@ def render():
 
     # ── KPI row ───────────────────────────────────────────────────
     c1, c2, c3, c4, c5, c6 = st.columns(6)
-    with c1: kpi_card("Campaigns",     str(stats["campaigns"]),    color="#2980B9")
-    with c2: kpi_card("Active",        str(stats["active"]),       color="#27AE60")
-    with c3: kpi_card("Closed",        str(stats["closed"]),       color="#7F8C8D")
-    with c4: kpi_card("Total Calls",   str(stats["total_calls"]),  color="#8E44AD")
-    with c5: kpi_card("Audited",       str(stats["audited"]),      color="#2980B9")
+    with c1: kpi_card("Campaigns",     str(stats["campaigns"]),    color="#0EA5E9")
+    with c2: kpi_card("Active",        str(stats["active"]),       color="#00D68F")
+    with c3: kpi_card("Closed",        str(stats["closed"]),       color="#64748B")
+    with c4: kpi_card("Total Calls",   str(stats["total_calls"]),  color="#38BDF8")
+    with c5: kpi_card("Audited",       str(stats["audited"]),      color="#F472B6")
     with c6:
         avg = stats["avg_score"]
         kpi_card("Avg QA Score",

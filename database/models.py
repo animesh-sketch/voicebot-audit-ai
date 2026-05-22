@@ -33,12 +33,22 @@ class FailureType(str, Enum):
     CLOSURE_FAILURE         = "Closure Failure"
 
 
+class FieldCategory(str, Enum):
+    AI_ISSUES           = "AI Issues"
+    ENTITY_CAPTURE      = "Entity Capture"
+    LEAD_CLASSIFICATION = "Lead Classification"
+    CALL_QUALITY        = "Call Quality"
+    COMPLIANCE          = "Compliance"
+    GENERAL             = "General"
+
+
 class IssueTag(str, Enum):
     LATENCY                  = "Latency"
     HALLUCINATION            = "Hallucination"
     STT_ERROR                = "STT Error"
     INTENT_MISCLASSIFICATION = "Intent Misclassification"
     CONVERSATION_DROP        = "Conversation Drop"
+    LANGUAGE_SWITCH          = "Language Switch"
 
 
 # ── Failure detection thresholds ───────────────────────────────────
@@ -84,33 +94,34 @@ ISSUE_TAG_COLORS = {
     IssueTag.STT_ERROR.value:                "#8E44AD",
     IssueTag.INTENT_MISCLASSIFICATION.value: "#2980B9",
     IssueTag.CONVERSATION_DROP.value:        "#E67E22",
+    IssueTag.LANGUAGE_SWITCH.value:          "#16A085",
 }
 
 FAILURE_TYPE_COLORS = {
-    FailureType.LATENCY.value:                  "#F39C12",
-    FailureType.HALLUCINATION.value:            "#E74C3C",
-    FailureType.ENTITY_CAPTURE.value:           "#C0392B",
-    FailureType.INTENT_MISCLASSIFICATION.value: "#2980B9",
-    FailureType.CONVERSATION_DROP.value:        "#E67E22",
-    FailureType.LOOP_RESPONSE.value:            "#8E44AD",
-    FailureType.LANGUAGE_DETECTION.value:       "#16A085",
-    FailureType.CLOSURE_FAILURE.value:          "#7F8C8D",
+    FailureType.LATENCY.value:                  "#FBBF24",
+    FailureType.HALLUCINATION.value:            "#F472B6",
+    FailureType.ENTITY_CAPTURE.value:           "#EC4899",
+    FailureType.INTENT_MISCLASSIFICATION.value: "#0EA5E9",
+    FailureType.CONVERSATION_DROP.value:        "#FB923C",
+    FailureType.LOOP_RESPONSE.value:            "#A78BFA",
+    FailureType.LANGUAGE_DETECTION.value:       "#00D68F",
+    FailureType.CLOSURE_FAILURE.value:          "#64748B",
 }
 
 LEAD_CATEGORY_COLORS = {
-    LeadCategory.HOT_LEAD.value:           "#E74C3C",
-    LeadCategory.WARM_LEAD.value:          "#F39C12",
-    LeadCategory.COLD_LEAD.value:          "#3498DB",
-    LeadCategory.NOT_INTERESTED.value:     "#7F8C8D",
-    LeadCategory.CALLBACK_REQUESTED.value: "#27AE60",
-    LeadCategory.ALREADY_CUSTOMER.value:   "#9B59B6",
-    LeadCategory.WRONG_NUMBER.value:       "#BDC3C7",
-    LeadCategory.UNKNOWN.value:            "#ECF0F1",
+    LeadCategory.HOT_LEAD.value:           "#EC4899",
+    LeadCategory.WARM_LEAD.value:          "#FBBF24",
+    LeadCategory.COLD_LEAD.value:          "#38BDF8",
+    LeadCategory.NOT_INTERESTED.value:     "#64748B",
+    LeadCategory.CALLBACK_REQUESTED.value: "#00D68F",
+    LeadCategory.ALREADY_CUSTOMER.value:   "#A78BFA",
+    LeadCategory.WRONG_NUMBER.value:       "#475569",
+    LeadCategory.UNKNOWN.value:            "#1E293B",
 }
 
 STATUS_COLORS = {
-    CampaignStatus.ACTIVE.value:         "#27AE60",
-    CampaignStatus.IN_PROGRESS.value:    "#2980B9",
-    CampaignStatus.READY_TO_CLOSE.value: "#F39C12",
-    CampaignStatus.CLOSED.value:         "#7F8C8D",
+    CampaignStatus.ACTIVE.value:         "#00D68F",
+    CampaignStatus.IN_PROGRESS.value:    "#0EA5E9",
+    CampaignStatus.READY_TO_CLOSE.value: "#F472B6",
+    CampaignStatus.CLOSED.value:         "#64748B",
 }

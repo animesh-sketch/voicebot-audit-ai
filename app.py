@@ -51,18 +51,25 @@ def _render_sidebar():
     with st.sidebar:
         # ── Brand header ──────────────────────────────────────────
         st.markdown(
-            """<div style="text-align:center;padding:1.2rem 0 0.8rem;">
-                <div style="font-size:2.5rem;">🎙️</div>
-                <div style="font-size:1.1rem;font-weight:700;color:white;margin-top:4px;">
-                    VoiceBot Audit AI
+            """<div style="text-align:center;padding:1.4rem 0 1rem;">
+                <div style="font-size:2.6rem;filter:drop-shadow(0 0 12px rgba(14,165,233,0.6));">🎙️</div>
+                <div style="font-size:1.05rem;font-weight:800;margin-top:8px;
+                            font-family:'Outfit',sans-serif;letter-spacing:0.02em;
+                            background:linear-gradient(135deg,#ffffff,#38BDF8,#0EA5E9);
+                            -webkit-background-clip:text;-webkit-text-fill-color:transparent;">
+                    AuditSense AI
                 </div>
-                <div style="font-size:0.72rem;color:#7F8C8D;margin-top:2px;">
+                <div style="font-size:0.68rem;color:#475569;margin-top:3px;letter-spacing:0.08em;text-transform:uppercase;">
                     Campaign Intelligence Platform
+                </div>
+                <div style="margin-top:10px;height:2px;
+                            background:linear-gradient(90deg,transparent,#0EA5E9,#38BDF8,#F472B6,transparent);
+                            border-radius:2px;opacity:0.6;">
                 </div>
             </div>""",
             unsafe_allow_html=True,
         )
-        st.markdown('<hr style="border-color:#1e3a5f;margin:0.5rem 0;">', unsafe_allow_html=True)
+        st.markdown('<hr style="border-color:rgba(56,189,248,0.1);margin:0.4rem 0;">', unsafe_allow_html=True)
 
         # ── Navigation ────────────────────────────────────────────
         current = st.session_state.get("page", "dashboard")
@@ -84,34 +91,41 @@ def _render_sidebar():
                 nav(key)
             st.markdown("</div>", unsafe_allow_html=True)
 
-        st.markdown('<hr style="border-color:#1e3a5f;margin:0.8rem 0;">', unsafe_allow_html=True)
+        st.markdown('<hr style="border-color:rgba(56,189,248,0.1);margin:0.8rem 0;">', unsafe_allow_html=True)
 
         # ── Live platform stats ───────────────────────────────────
         try:
             stats = get_platform_stats()
+            score_color = "#00D68F" if stats['avg_score'] >= 70 else "#F472B6"
             st.markdown(
-                f"""<div style="padding:0 0.5rem;font-size:0.78rem;color:#95A5A6;">
-                    <div style="margin-bottom:6px;">
-                        <span style="color:#ECF0F1;">📋 Campaigns:</span>
-                        <b style="color:#27AE60;float:right;">{stats['campaigns']}</b>
+                f"""<div style="padding:0 0.3rem;">
+                    <div style="font-size:0.62rem;text-transform:uppercase;letter-spacing:0.1em;
+                                color:#475569;margin-bottom:8px;font-weight:600;">Platform Stats</div>
+                    <div style="display:flex;justify-content:space-between;align-items:center;
+                                margin-bottom:6px;padding:4px 0;">
+                        <span style="font-size:0.78rem;color:#64748B;">📋 Campaigns</span>
+                        <b style="color:#38BDF8;font-size:0.82rem;">{stats['campaigns']}</b>
                     </div>
-                    <div style="margin-bottom:6px;">
-                        <span style="color:#ECF0F1;">📞 Total Calls:</span>
-                        <b style="color:#2980B9;float:right;">{stats['total_calls']}</b>
+                    <div style="display:flex;justify-content:space-between;align-items:center;
+                                margin-bottom:6px;padding:4px 0;">
+                        <span style="font-size:0.78rem;color:#64748B;">📞 Total Calls</span>
+                        <b style="color:#0EA5E9;font-size:0.82rem;">{stats['total_calls']}</b>
                     </div>
-                    <div style="margin-bottom:6px;">
-                        <span style="color:#ECF0F1;">✅ Audited:</span>
-                        <b style="color:#27AE60;float:right;">{stats['audited']}</b>
+                    <div style="display:flex;justify-content:space-between;align-items:center;
+                                margin-bottom:6px;padding:4px 0;">
+                        <span style="font-size:0.78rem;color:#64748B;">✅ Audited</span>
+                        <b style="color:#00D68F;font-size:0.82rem;">{stats['audited']}</b>
                     </div>
-                    <div style="margin-bottom:6px;">
-                        <span style="color:#ECF0F1;">🤖 Failures:</span>
-                        <b style="color:#E74C3C;float:right;">{stats['failures']}</b>
+                    <div style="display:flex;justify-content:space-between;align-items:center;
+                                margin-bottom:6px;padding:4px 0;">
+                        <span style="font-size:0.78rem;color:#64748B;">🤖 Failures</span>
+                        <b style="color:#F472B6;font-size:0.82rem;">{stats['failures']}</b>
                     </div>
-                    <div>
-                        <span style="color:#ECF0F1;">📈 Avg Score:</span>
-                        <b style="color:{'#27AE60' if stats['avg_score'] >= 70 else '#E74C3C'};float:right;">
-                            {stats['avg_score']:.1f}%
-                        </b>
+                    <div style="display:flex;justify-content:space-between;align-items:center;
+                                padding:5px 8px;border-radius:8px;
+                                background:rgba(14,165,233,0.07);border:1px solid rgba(56,189,248,0.12);">
+                        <span style="font-size:0.78rem;color:#94A3B8;">📈 Avg Score</span>
+                        <b style="color:{score_color};font-size:0.88rem;">{stats['avg_score']:.1f}%</b>
                     </div>
                 </div>""",
                 unsafe_allow_html=True,
@@ -119,7 +133,7 @@ def _render_sidebar():
         except Exception:
             pass
 
-        st.markdown('<hr style="border-color:#1e3a5f;margin:0.8rem 0;">', unsafe_allow_html=True)
+        st.markdown('<hr style="border-color:rgba(56,189,248,0.1);margin:0.8rem 0;">', unsafe_allow_html=True)
 
         # ── Seed data button (dev helper) ─────────────────────────
         with st.expander("🔧 Dev Tools"):
@@ -151,8 +165,11 @@ def _render_sidebar():
                 st.rerun()
 
         st.markdown(
-            '<div style="position:absolute;bottom:1rem;left:0;right:0;text-align:center;'
-            'font-size:0.7rem;color:#4A5568;">v1.0.0 · VoiceBot Audit AI</div>',
+            '<div style="position:absolute;bottom:1rem;left:0;right:0;text-align:center;">'
+            '<span style="font-size:0.65rem;color:#334155;letter-spacing:0.08em;">v1.0.0 · </span>'
+            '<span style="font-size:0.65rem;background:linear-gradient(90deg,#38BDF8,#F472B6);'
+            '-webkit-background-clip:text;-webkit-text-fill-color:transparent;font-weight:600;">AuditSense AI</span>'
+            '</div>',
             unsafe_allow_html=True,
         )
 
