@@ -40,6 +40,28 @@ def _rows(rows) -> list[dict]:
 
 # ─────────────────────────── Schema Init ─────────────────────────
 
+def _migrate_db():
+    """Add new columns to existing databases without destroying data."""
+    migrations = [
+        # v1 migrations
+        "ALTER TABLE audit_templates ADD COLUMN field_category TEXT DEFAULT 'General'",
+        "ALTER TABLE audit_results ADD COLUMN lead_audit_category TEXT DEFAULT NULL",
+        # v2 migrations — Convin Sense Audit Framework v0.3
+        "ALTER TABLE audit_templates ADD COLUMN tier TEXT DEFAULT 'IMPORTANT'",
+        "ALTER TABLE audit_templates ADD COLUMN weight_percent REAL DEFAULT 4.0",
+        "ALTER TABLE audit_templates ADD COLUMN response_type TEXT DEFAULT 'YES_NO'",
+        "ALTER TABLE audit_templates ADD COLUMN is_fatal INTEGER DEFAULT 0",
+        "ALTER TABLE audit_templates ADD COLUMN pass_value TEXT DEFAULT 'Yes'",
+        "ALTER TABLE audit_results ADD COLUMN fatal_triggered INTEGER DEFAULT 0",
+    ]
+    with _conn() as con:
+        for sql in migrations:
+            try:
+                con.execute(sql)
+            except Exception:
+                pass  # Column already exists
+
+
 def init_db():
     with _conn() as con:
         con.executescript("""
@@ -63,26 +85,34 @@ def init_db():
             );
 
             CREATE TABLE IF NOT EXISTS audit_templates (
-                field_id    TEXT PRIMARY KEY,
-                campaign_id TEXT NOT NULL,
-                field_name  TEXT NOT NULL,
-                max_score   REAL DEFAULT 10.0,
-                order_index INTEGER DEFAULT 0,
+                field_id       TEXT PRIMARY KEY,
+                campaign_id    TEXT NOT NULL,
+                field_name     TEXT NOT NULL,
+                field_category TEXT DEFAULT 'General',
+                max_score      REAL DEFAULT 10.0,
+                tier           TEXT DEFAULT 'IMPORTANT',
+                weight_percent REAL DEFAULT 4.0,
+                response_type  TEXT DEFAULT 'YES_NO',
+                is_fatal       INTEGER DEFAULT 0,
+                pass_value     TEXT DEFAULT 'Yes',
+                order_index    INTEGER DEFAULT 0,
                 FOREIGN KEY (campaign_id) REFERENCES campaigns(campaign_id) ON DELETE CASCADE
             );
 
             CREATE TABLE IF NOT EXISTS audit_results (
-                audit_id          TEXT PRIMARY KEY,
-                call_id           TEXT NOT NULL UNIQUE,
-                campaign_id       TEXT NOT NULL,
-                auditor_name      TEXT DEFAULT 'Auditor',
-                field_scores      TEXT,   -- JSON: {field_id: score}
-                total_score       REAL DEFAULT 0,
-                max_possible_score REAL DEFAULT 0,
-                percentage_score  REAL DEFAULT 0,
-                issue_tags        TEXT DEFAULT '[]',  -- JSON array
-                notes             TEXT DEFAULT '',
-                created_at        TEXT DEFAULT (datetime('now')),
+                audit_id             TEXT PRIMARY KEY,
+                call_id              TEXT NOT NULL UNIQUE,
+                campaign_id          TEXT NOT NULL,
+                auditor_name         TEXT DEFAULT 'Auditor',
+                field_scores         TEXT,   -- JSON: {field_id: "Yes"/"No"/"NA"/"FATAL"} or legacy numeric
+                total_score          REAL DEFAULT 0,
+                max_possible_score   REAL DEFAULT 0,
+                percentage_score     REAL DEFAULT 0,
+                issue_tags           TEXT DEFAULT '[]',  -- JSON array
+                notes                TEXT DEFAULT '',
+                lead_audit_category  TEXT DEFAULT NULL,
+                fatal_triggered      INTEGER DEFAULT 0,
+                created_at           TEXT DEFAULT (datetime('now')),
                 FOREIGN KEY (call_id) REFERENCES calls(call_id) ON DELETE CASCADE
             );
 
@@ -107,6 +137,7 @@ def init_db():
                 FOREIGN KEY (campaign_id) REFERENCES campaigns(campaign_id)
             );
         """)
+    _migrate_db()
 
 
 # ─────────────────────────── Campaigns ───────────────────────────
@@ -271,7 +302,17 @@ def get_template_fields(campaign_id: str) -> list[dict]:
     return _rows(rows)
 
 
-def add_template_field(campaign_id: str, field_name: str, max_score: float = 10.0) -> str:
+def add_template_field(
+    campaign_id: str,
+    field_name: str,
+    max_score: float = 10.0,
+    field_category: str = "General",
+    tier: str = "IMPORTANT",
+    weight_percent: float = 4.0,
+    response_type: str = "YES_NO",
+    is_fatal: int = 0,
+    pass_value: str = "Yes",
+) -> str:
     fid = f"FLD-{uuid.uuid4().hex[:6].upper()}"
     with _conn() as con:
         order = con.execute(
@@ -279,10 +320,37 @@ def add_template_field(campaign_id: str, field_name: str, max_score: float = 10.
             (campaign_id,)
         ).fetchone()[0]
         con.execute(
-            "INSERT INTO audit_templates (field_id, campaign_id, field_name, max_score, order_index) VALUES (?,?,?,?,?)",
-            (fid, campaign_id, field_name, max_score, order),
+            """INSERT INTO audit_templates
+               (field_id, campaign_id, field_name, field_category, max_score,
+                tier, weight_percent, response_type, is_fatal, pass_value, order_index)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            (fid, campaign_id, field_name, field_category, max_score,
+             tier, weight_percent, response_type, int(is_fatal), pass_value, order),
         )
     return fid
+
+
+def update_template_field(
+    field_id: str,
+    field_name: str,
+    max_score: float,
+    field_category: str = "General",
+    tier: str = "IMPORTANT",
+    weight_percent: float = 4.0,
+    response_type: str = "YES_NO",
+    is_fatal: int = 0,
+    pass_value: str = "Yes",
+):
+    with _conn() as con:
+        con.execute(
+            """UPDATE audit_templates
+               SET field_name=?, field_category=?, max_score=?,
+                   tier=?, weight_percent=?, response_type=?, is_fatal=?, pass_value=?
+               WHERE field_id=?""",
+            (field_name, field_category, max_score,
+             tier, weight_percent, response_type, int(is_fatal), pass_value,
+             field_id),
+        )
 
 
 def delete_template_field(field_id: str):
@@ -290,14 +358,22 @@ def delete_template_field(field_id: str):
         con.execute("DELETE FROM audit_templates WHERE field_id = ?", (field_id,))
 
 
-def seed_template_fields(campaign_id: str, fields: list[tuple[str, float]]):
-    """Bulk-insert (field_name, max_score) pairs — for seeding."""
-    for i, (name, max_s) in enumerate(fields):
-        fid = f"FLD-{uuid.uuid4().hex[:6].upper()}"
+def seed_template_fields(
+    campaign_id: str,
+    fields: list[tuple],
+):
+    """Bulk-insert (field_name, max_score) or (field_name, max_score, field_category) — for seeding."""
+    for i, entry in enumerate(fields):
+        name  = entry[0]
+        max_s = entry[1]
+        cat   = entry[2] if len(entry) > 2 else "General"
+        fid   = f"FLD-{uuid.uuid4().hex[:6].upper()}"
         with _conn() as con:
             con.execute(
-                "INSERT INTO audit_templates (field_id, campaign_id, field_name, max_score, order_index) VALUES (?,?,?,?,?)",
-                (fid, campaign_id, name, max_s, i),
+                """INSERT INTO audit_templates
+                   (field_id, campaign_id, field_name, field_category, max_score, order_index)
+                   VALUES (?,?,?,?,?,?)""",
+                (fid, campaign_id, name, cat, max_s, i),
             )
 
 
@@ -307,15 +383,55 @@ def submit_audit(
     call_id: str,
     campaign_id: str,
     auditor_name: str,
-    field_scores: dict,        # {field_id: score}
+    field_scores: dict,        # {field_id: "Yes"/"No"/"NA"/"FATAL"} (new) or numeric (legacy)
     issue_tags: list[str],
     notes: str = "",
+    lead_audit_category: str = None,
 ) -> str:
-    """Save audit result and auto-update campaign status."""
+    """Save audit result and auto-update campaign status.
+
+    Supports two scoring modes:
+    • New (Convin Sense v0.3): field_scores values are strings ("Yes"/"No"/"NA"/"FATAL").
+      Scoring is weight-based; FATAL params auto-fail the audit.
+    • Legacy: field_scores values are numeric (0–max_score). Raw sum / total scoring.
+    """
     fields = get_template_fields(campaign_id)
-    total = sum(field_scores.get(f["field_id"], 0) for f in fields)
-    max_p = sum(f["max_score"] for f in fields)
-    pct   = round(total / max_p * 100, 2) if max_p else 0.0
+
+    # ── Detect scoring mode ────────────────────────────────────────
+    sample_val = next(iter(field_scores.values()), None)
+    is_new_scoring = isinstance(sample_val, str)
+
+    if is_new_scoring:
+        # Weighted Yes/No scoring with FATAL detection
+        earned_weight = 0.0
+        total_weight  = 0.0
+        fatal_triggered = 0
+        for f in fields:
+            answer   = field_scores.get(f["field_id"])
+            weight   = float(f.get("weight_percent") or 0)
+            f_fatal  = int(f.get("is_fatal") or 0)
+            pass_val = f.get("pass_value") or "Yes"
+            if f_fatal:
+                # Any answer that isn't the pass value (and isn't NA) triggers FATAL
+                if answer and answer not in (pass_val, "NA", None, ""):
+                    fatal_triggered = 1
+            else:
+                if not answer or answer == "NA":
+                    continue  # NA excluded; weight redistributed
+                total_weight += weight
+                if answer == pass_val:
+                    earned_weight += weight
+        total = earned_weight
+        max_p = total_weight
+        pct   = 0.0 if fatal_triggered else (
+            round(earned_weight / total_weight * 100, 2) if total_weight else 0.0
+        )
+    else:
+        # Legacy numeric scoring
+        total = sum(field_scores.get(f["field_id"], 0) for f in fields)
+        max_p = sum(f["max_score"] for f in fields)
+        pct   = round(total / max_p * 100, 2) if max_p else 0.0
+        fatal_triggered = 0
 
     with _conn() as con:
         existing = con.execute(
@@ -326,10 +442,12 @@ def submit_audit(
                 """UPDATE audit_results
                    SET auditor_name=?, field_scores=?, total_score=?,
                        max_possible_score=?, percentage_score=?,
-                       issue_tags=?, notes=?, created_at=datetime('now')
+                       issue_tags=?, notes=?, lead_audit_category=?,
+                       fatal_triggered=?, created_at=datetime('now')
                    WHERE call_id=?""",
                 (auditor_name, json.dumps(field_scores), total, max_p, pct,
-                 json.dumps(issue_tags), notes, call_id),
+                 json.dumps(issue_tags), notes, lead_audit_category,
+                 fatal_triggered, call_id),
             )
             aid = existing["audit_id"]
         else:
@@ -337,10 +455,12 @@ def submit_audit(
             con.execute(
                 """INSERT INTO audit_results
                    (audit_id, call_id, campaign_id, auditor_name, field_scores,
-                    total_score, max_possible_score, percentage_score, issue_tags, notes)
-                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                    total_score, max_possible_score, percentage_score,
+                    issue_tags, notes, lead_audit_category, fatal_triggered)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (aid, call_id, campaign_id, auditor_name, json.dumps(field_scores),
-                 total, max_p, pct, json.dumps(issue_tags), notes),
+                 total, max_p, pct, json.dumps(issue_tags), notes,
+                 lead_audit_category, fatal_triggered),
             )
     auto_update_campaign_status(campaign_id)
     return aid

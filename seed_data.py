@@ -1,6 +1,7 @@
 """
 seed_data.py — Populates VoiceBot Audit AI with realistic demo data.
-3 campaigns · 35 calls · 23 audits · 2 closed campaigns with full insights.
+4 campaigns · 50+ calls · 30+ audits · 3 closed campaigns with full insights.
+Ferry/Transport campaign added to demonstrate domain-specific entity capture fields.
 """
 import os
 import random
@@ -261,10 +262,156 @@ _LEADS = [
 ]
 _LINKS = [f"https://storage.voicebot.io/calls/{uuid.uuid4().hex[:8]}.mp3" for _ in range(len(TRANSCRIPTS))]
 
-# ── Field definitions ─────────────────────────────────────────────
-TECH_FIELDS   = [("Greeting Quality", 10), ("Entity Capture", 15), ("Bot Clarity", 15), ("Lead Qualification", 10), ("Closure Attempt", 10)]
-HEALTH_FIELDS = [("Greeting & Empathy", 10), ("Appointment Intent", 15), ("Patient Verification", 15), ("Scheduling Success", 10), ("Closure", 10)]
-FINANCE_FIELDS= [("Greeting Quality", 10), ("Financial Needs Capture", 15), ("Credit Qualification", 15), ("Product Matching", 10), ("Closure Attempt", 10)]
+# ── Field definitions: (name, max_score, field_category) ──────────
+_QA   = "Call Quality"
+_AI   = "AI Issues"
+_ENT  = "Entity Capture"
+_LEAD = "Lead Classification"
+_COMP = "Compliance"
+
+TECH_FIELDS = [
+    ("Greeting Quality",        10, _QA),
+    ("Bot Response Latency",    10, _AI),
+    ("Entity Capture",          15, _ENT),
+    ("Bot Clarity",             15, _QA),
+    ("Lead Qualification",      10, _LEAD),
+    ("Closure Attempt",         10, _QA),
+]
+HEALTH_FIELDS = [
+    ("Greeting & Empathy",      10, _QA),
+    ("Appointment Intent",      15, _QA),
+    ("Patient Name Capture",    15, _ENT),
+    ("Date of Birth Capture",   10, _ENT),
+    ("Scheduling Success",      10, _QA),
+    ("Compliance & Disclosure", 10, _COMP),
+    ("Closure",                 10, _QA),
+]
+FINANCE_FIELDS = [
+    ("Greeting Quality",        10, _QA),
+    ("Financial Needs Capture", 15, _ENT),
+    ("Income Capture",          10, _ENT),
+    ("Credit Qualification",    15, _LEAD),
+    ("Product Matching",        10, _LEAD),
+    ("Compliance Check",        15, _COMP),
+    ("Closure Attempt",         10, _QA),
+]
+FERRY_FIELDS = [
+    ("Greeting Quality",            10, _QA),
+    ("Bot Latency",                 10, _AI),
+    ("Hallucination Check",         10, _AI),
+    ("STT Error Rate",              10, _AI),
+    ("Language Switch Handling",    10, _AI),
+    ("Customer Name Capture",       15, _ENT),
+    ("Route Capture",               15, _ENT),
+    ("Passenger Count Capture",     15, _ENT),
+    ("Sailing Date Capture",        15, _ENT),
+    ("Lead Classification Accuracy", 10, _LEAD),
+    ("Closure & Next Steps",        10, _QA),
+]
+
+
+FERRY_TRANSCRIPTS = [
+    # F0 — Good ferry booking call
+    """Bot: Hello! Welcome to SeaLink Ferries. I'm your booking assistant. May I have your name?
+Customer: Hi, it's James Thornton.
+Bot: Hello James! I'd be happy to help you book a ferry. Which route are you interested in?
+Customer: I'd like to book the Auckland to Waiheke Island route.
+Bot: Great choice! How many passengers will be travelling?
+Customer: There will be 4 of us — 2 adults and 2 children.
+Bot: Perfect. And what sailing date are you looking at?
+Customer: We're hoping for Saturday the 15th of March.
+Bot: I have a 9:30 AM sailing on Saturday 15 March available. That's 4 passengers on the Auckland to Waiheke Island route. Shall I confirm that booking?
+Customer: Yes please!
+Bot: Wonderful! Booking confirmed for James Thornton — 4 passengers, Auckland to Waiheke Island, 15 March at 9:30 AM. You'll receive a confirmation email shortly. Have a great trip!""",
+
+    # F1 — Entity capture failure (name and route repeated)
+    """Bot: Welcome to SeaLink Ferries! May I have your name please?
+Customer: Maria Santos.
+Bot: I'm sorry, could you repeat your name?
+Customer: Maria Santos.
+Bot: Could you spell that for me?
+Customer: M-A-R-I-A S-A-N-T-O-S. I've said it twice now.
+Bot: I apologize. Maria, which route would you like to book?
+Customer: Wellington to Picton.
+Bot: Sorry, which route was that again?
+Customer: Wellington to Picton! I've already told you the route.
+Bot: I apologize for the inconvenience. Let me try again.""",
+
+    # F2 — Latency on ferry call
+    """Bot: Hello! SeaLink Ferries booking service. How can I help?
+Customer: I want to book a ferry for tomorrow.
+Bot: Of course! Please wait while I check availability...
+Customer: Hello? Are you still there?
+Bot: One moment please, checking sailings...
+Customer: This is taking too long.
+Bot: I apologize for the delay. I can see sailings for tomorrow. What route would you like?
+Customer: Auckland to Waiheke.
+Bot: Please wait while I process that route...
+Customer: Still waiting...
+Bot: I have a 10 AM sailing available. How many passengers?""",
+
+    # F3 — Good call with language switch
+    """Bot: Welcome to SeaLink Ferries! How can I help you today?
+Customer: Kia ora, ko Thomas toku ingoa. I need to book a ferry.
+Bot: Kia ora Thomas! I'd be happy to help. Which route would you like?
+Customer: Interislander, Wellington to Picton.
+Bot: Excellent! For the Wellington to Picton route, how many passengers?
+Customer: Just myself — one adult.
+Bot: And your preferred sailing date?
+Customer: Next Friday, the 21st.
+Bot: I have a 2:30 PM sailing on Friday 21st for 1 passenger on the Wellington to Picton route. Shall I confirm?
+Customer: Yes, that's perfect. Thank you!
+Bot: Booking confirmed for Thomas! Wellington to Picton, 21st at 2:30 PM. Have a wonderful journey!""",
+
+    # F4 — Wrong date / hallucination
+    """Bot: SeaLink Ferries, how can I help?
+Customer: Hi, I want to book for the 30th of February.
+Bot: Of course! I can book you for the 30th of February.
+Customer: Wait, that's wrong. February doesn't have 30 days. You just confirmed an invalid date.
+Bot: I apologize for the confusion. You're right, February does not have 30 days.
+Customer: This bot confirmed a date that doesn't exist. That's completely wrong.
+Bot: I'm sorry about that error. What sailing date would you prefer?
+Customer: I don't trust your system anymore. Goodbye.""",
+
+    # F5 — Conversation drop (very short)
+    """Bot: Hello, SeaLink Ferries! May I help you book a ferry today?
+Customer: Yes, I need to book 6 passengers from""",
+
+    # F6 — Good call with full entity capture
+    """Bot: Good morning! SeaLink Ferries booking assistant. May I have your name?
+Customer: Sophie Williams.
+Bot: Good morning Sophie! Which route are you booking for?
+Customer: We need the Devonport to Auckland CBD route.
+Bot: How many passengers will be travelling?
+Customer: It will be 2 adults.
+Bot: And the date of travel?
+Customer: Wednesday the 5th of April.
+Bot: Perfect. To confirm — Sophie Williams, 2 passengers, Devonport to Auckland CBD, 5th April. Shall I proceed with the booking?
+Customer: Yes please.
+Bot: Booking confirmed! Your reference is SEA-2046. Have a great trip, Sophie!""",
+
+    # F7 — STT error / repeated entity
+    """Bot: Welcome to SeaLink Ferries! What's your name?
+Customer: It's Raj Patel.
+Bot: Could you repeat that? I didn't quite catch your name.
+Customer: Raj Patel.
+Bot: And the route you'd like to travel?
+Customer: Auckland to Waiheke Island.
+Bot: Sorry, could you say the destination again?
+Customer: Waiheke Island. From Auckland.
+Bot: I didn't catch that. Could you spell the destination?
+Customer: W-A-I-H-E-K-E. This bot can't understand basic words.
+Bot: Thank you. And the number of passengers?""",
+]
+
+_FERRY_LEADS = [
+    "HOT_LEAD", "COLD_LEAD", "WARM_LEAD", "HOT_LEAD",
+    "NOT_INTERESTED", "UNKNOWN", "HOT_LEAD", "COLD_LEAD",
+]
+_FERRY_AUDIT_LEADS = [
+    "HOT_LEAD", "NOT_INTERESTED", "HOT_LEAD", "HOT_LEAD",
+    "NOT_INTERESTED", "UNKNOWN", "HOT_LEAD", "WARM_LEAD",
+]
 
 
 def _rand_scores(fields, quality: float) -> dict:
@@ -298,8 +445,8 @@ def seed():
 
     # ─── Campaign 1: TechSolutions Q1 Lead Gen (CLOSED) ──────────
     c1 = create_campaign("TechSolutions Q1 Lead Gen", "TechSolutions Inc.")
-    for name, max_s in TECH_FIELDS:
-        add_template_field(c1, name, float(max_s))
+    for entry in TECH_FIELDS:
+        add_template_field(c1, entry[0], float(entry[1]), entry[2])
     f1 = get_template_fields(c1)
 
     tech_txts = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
@@ -329,8 +476,8 @@ def seed():
 
     # ─── Campaign 2: HealthCare Pro (IN_PROGRESS, partially audited) ─
     c2 = create_campaign("HealthCare Pro Patient Outreach", "HealthCare Pro Ltd.")
-    for name, max_s in HEALTH_FIELDS:
-        add_template_field(c2, name, float(max_s))
+    for entry in HEALTH_FIELDS:
+        add_template_field(c2, entry[0], float(entry[1]), entry[2])
     f2 = get_template_fields(c2)
 
     health_txts = [13, 14, 15, 0, 1, 10, 11, 12, 2, 4, 7, 8]
@@ -354,8 +501,8 @@ def seed():
 
     # ─── Campaign 3: FinanceBot Mortgage Leads (CLOSED) ──────────
     c3 = create_campaign("FinanceBot Mortgage Lead Gen", "FinanceBot Corp.")
-    for name, max_s in FINANCE_FIELDS:
-        add_template_field(c3, name, float(max_s))
+    for entry in FINANCE_FIELDS:
+        add_template_field(c3, entry[0], float(entry[1]), entry[2])
     f3 = get_template_fields(c3)
 
     fin_txts = [16, 17, 18, 0, 1, 3, 5, 10]
@@ -383,10 +530,53 @@ def seed():
     fails3 = ins3["campaign_summary"]["total_failures"]
     print(f"  ✓ Campaign 3 CLOSED — avg score: {avg3:.1f}%, failures: {fails3}")
 
+    # ─── Campaign 4: SeaLink Ferry Booking Bot (CLOSED) ──────────
+    c4 = create_campaign("SeaLink Ferry Booking Audit", "SeaLink Ferries Ltd.")
+    for entry in FERRY_FIELDS:
+        add_template_field(c4, entry[0], float(entry[1]), entry[2])
+    f4 = get_template_fields(c4)
+
+    start4 = datetime(2025, 6, 1)
+    call_ids4 = []
+    for i, tx in enumerate(FERRY_TRANSCRIPTS):
+        lead = _FERRY_LEADS[i % len(_FERRY_LEADS)]
+        dur  = random.randint(30, 360)
+        link = f"https://storage.sealink.io/calls/{uuid.uuid4().hex[:8]}.mp3"
+        cid  = create_call(c4, link, dur, _rand_date(start4, 30), tx, lead)
+        call_ids4.append(cid)
+    print(f"  ✓ Campaign 4 — {len(call_ids4)} calls created")
+
+    ferry_qualities = [0.92, 0.30, 0.40, 0.88, 0.28, 0.15, 0.89, 0.35]
+    ferry_tags_map = [
+        [],
+        ["STT Error", "Intent Misclassification"],
+        ["Latency"],
+        [],
+        ["Hallucination"],
+        ["Conversation Drop"],
+        [],
+        ["STT Error", "Latency"],
+    ]
+    for idx, (cid, quality) in enumerate(zip(call_ids4, ferry_qualities)):
+        scores  = _rand_scores(f4, quality)
+        tags    = ferry_tags_map[idx] if idx < len(ferry_tags_map) else _rand_tags(quality)
+        lac     = _FERRY_AUDIT_LEADS[idx] if idx < len(_FERRY_AUDIT_LEADS) else None
+        notes   = "Full entity capture — excellent." if quality > 0.8 else "Entity capture failure noted."
+        submit_audit(cid, c4, random.choice(["Anna QA", "Ben Audit"]), scores, tags, notes,
+                     lead_audit_category=lac)
+    print(f"  ✓ Campaign 4 — {len(call_ids4)} audits submitted")
+
+    close_campaign(c4)
+    ins4 = generate_campaign_insights(c4)
+    avg4 = ins4["campaign_summary"]["avg_qa_score"]
+    fails4 = ins4["campaign_summary"]["total_failures"]
+    print(f"  ✓ Campaign 4 CLOSED — avg score: {avg4:.1f}%, failures: {fails4}")
+
     print("\n✅  Seed complete!")
     print(f"   Campaign 1: {c1} (CLOSED, avg {avg1:.1f}%)")
     print(f"   Campaign 2: {c2} (IN_PROGRESS, 8/12 audited)")
     print(f"   Campaign 3: {c3} (CLOSED, avg {avg3:.1f}%)")
+    print(f"   Campaign 4: {c4} (CLOSED, avg {avg4:.1f}%)")
     print("\n   Run: streamlit run app.py\n")
 
 

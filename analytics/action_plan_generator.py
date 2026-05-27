@@ -6,6 +6,7 @@ from database.models import (
     FAILURE_RATE_THRESHOLDS,
     QA_SCORE_THRESHOLDS,
     ENTITY_CAPTURE_WARNING,
+    CONVIN_SENSE_PASS_THRESHOLD,
     FailureType,
 )
 
@@ -121,11 +122,12 @@ def _make_item(priority: str, category: str, finding: str, recommendation: str,
 
 
 def generate_action_plan(
-    qa_analysis:          dict,
-    failure_analysis:     dict,
-    entity_accuracy:      dict,
+    qa_analysis:           dict,
+    failure_analysis:      dict,
+    entity_accuracy:       dict,
     conversation_analysis: dict,
-    campaign_name:        str = "",
+    campaign_name:         str = "",
+    lead_classification:   dict = None,
 ) -> list[dict]:
     """
     Returns a list of action items sorted by priority.
@@ -155,15 +157,17 @@ def generate_action_plan(
     elif avg_score < QA_SCORE_THRESHOLDS["warning"]:
         items.append(_make_item(
             "HIGH", "Overall Quality",
-            f"Campaign average QA score ({avg_score:.1f}%) is below the 70% quality threshold.",
+            f"Campaign average QA score ({avg_score:.1f}%) is below the "
+            f"{CONVIN_SENSE_PASS_THRESHOLD:.0f}% Convin Sense pass threshold.",
             "Prioritise quality improvement initiatives across all bot components.",
             [
                 "Schedule a QA review meeting with bot team and operations.",
                 "Identify the bottom 20% scoring calls and analyse failure patterns.",
-                "Set a quality improvement target of +10 pts in next sprint.",
+                f"Set a quality improvement target to exceed {CONVIN_SENSE_PASS_THRESHOLD:.0f}% in next sprint.",
+                "Review all FATAL parameter failures (NBA, DND, abrupt disconnection) immediately.",
             ],
             "QA Lead", "1 week",
-            "Bring average QA score above 70% within 2 sprints.",
+            f"Bring average QA score above {CONVIN_SENSE_PASS_THRESHOLD:.0f}% within 2 sprints.",
         ))
 
     # ── Per-failure-type actions ──────────────────────────────────
@@ -210,6 +214,27 @@ def generate_action_plan(
             "ML Team", "2 weeks",
             f"Improve entity capture from {capture_rate * 100:.0f}% to > 85%.",
         ))
+
+    # ── Lead classification mismatch ─────────────────────────────
+    if lead_classification:
+        mismatch_rate = lead_classification.get("mismatch_rate", 0)
+        if mismatch_rate > 0.20:
+            pct_str = f"{mismatch_rate * 100:.0f}%"
+            items.append(_make_item(
+                "HIGH" if mismatch_rate > 0.35 else "MEDIUM",
+                "Lead Intelligence",
+                f"Bot lead classification disagrees with auditor assessment in {pct_str} of audited calls.",
+                "Retrain lead classification model using auditor-corrected labels.",
+                [
+                    "Export the mismatch pairs (bot label vs auditor label) as a training dataset.",
+                    "Retrain intent/classification model with corrected labels.",
+                    "Add a post-call review step where auditors validate bot lead scores.",
+                    "Set confidence thresholds — low-confidence classifications → human review.",
+                ],
+                "ML / QA Team",
+                "2–3 weeks",
+                f"Reduce lead classification mismatch from {pct_str} to < 10%.",
+            ))
 
     # ── Conversation drop ─────────────────────────────────────────
     drop_rate = conversation_analysis.get("drop_rate", 0)

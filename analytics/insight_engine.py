@@ -19,8 +19,22 @@ from database.db_manager import (
     clear_failures_for_call,
     save_bot_failures,
 )
+from database.models import CONVIN_SENSE_PASS_THRESHOLD
 from analytics.failure_engine import analyze_call_failures
 from analytics.action_plan_generator import generate_action_plan
+
+
+def _score_to_numeric(val, max_score: float, pass_value: str = "Yes") -> float | None:
+    """Convert a field answer to a numeric score (or None for NA/excluded)."""
+    if val is None:
+        return None
+    if isinstance(val, str):
+        if val in ("NA",):
+            return None
+        if val == "FATAL":
+            return 0.0
+        return max_score if val == pass_value else 0.0
+    return float(val)
 
 
 def generate_campaign_insights(campaign_id: str) -> dict:
@@ -69,7 +83,7 @@ def generate_campaign_insights(campaign_id: str) -> dict:
     entity_accuracy = _compute_entity_accuracy(audits_df, fields)
 
     # ── Step 6: Lead classification ───────────────────────────────
-    lead_classification = _compute_lead_classification(calls_df)
+    lead_classification = _compute_lead_classification(calls_df, audits_df)
 
     # ── Step 7: Conversation analysis ────────────────────────────
     conversation_analysis = _compute_conversation_analysis(calls_df, failure_df)
@@ -80,7 +94,8 @@ def generate_campaign_insights(campaign_id: str) -> dict:
     # ── Step 9: Action plan ───────────────────────────────────────
     action_plan = generate_action_plan(
         qa_analysis, failure_analysis, entity_accuracy,
-        conversation_analysis, campaign.get("campaign_name", "")
+        conversation_analysis, campaign.get("campaign_name", ""),
+        lead_classification=lead_classification,
     )
 
     campaign_summary = {
@@ -120,33 +135,41 @@ def _compute_qa_analysis(audits_df: pd.DataFrame, fields: list[dict]) -> dict:
 
     scores = audits_df["percentage_score"].dropna()
     avg    = float(scores.mean())
-    pass_r = float((scores >= 70).mean() * 100)
+    pass_r = float((scores >= CONVIN_SENSE_PASS_THRESHOLD).mean() * 100)
 
     # Score distribution
-    bins   = [0, 40, 55, 70, 85, 101]
-    labels = ["0–40 (Poor)", "40–55 (Below Avg)", "55–70 (Average)", "70–85 (Good)", "85–100 (Excellent)"]
+    bins   = [0, 40, 55, 70, 80, 101]
+    labels = ["0–40 (Poor)", "40–55 (Below Avg)", "55–70 (Average)", "70–80 (Near Pass)", "80–100 (Pass)"]
     cut    = pd.cut(scores, bins=bins, labels=labels, right=False)
     dist   = cut.value_counts().reindex(labels, fill_value=0).to_dict()
 
-    # Per-field breakdown
+    # Per-field breakdown (handles both numeric legacy and Yes/No string values)
+    import json as _json
     field_breakdown = []
     for field in fields:
-        fid  = field["field_id"]
-        max_s = field["max_score"]
+        fid      = field["field_id"]
+        max_s    = float(field.get("weight_percent") or field.get("max_score") or 10)
+        pass_val = field.get("pass_value") or "Yes"
+        is_fatal = bool(int(field.get("is_fatal") or 0))
+        if is_fatal:
+            continue  # exclude FATAL-only params from numeric breakdown
+
         field_scores = []
         for _, row in audits_df.iterrows():
             fs = row.get("field_scores") or {}
             if isinstance(fs, str):
-                import json; fs = json.loads(fs)
+                fs = _json.loads(fs)
             if fid in fs:
-                field_scores.append(float(fs[fid]))
+                numeric = _score_to_numeric(fs[fid], max_s, pass_val)
+                if numeric is not None:
+                    field_scores.append(numeric)
         if field_scores:
             avg_f = sum(field_scores) / len(field_scores)
             field_breakdown.append({
                 "field_name":  field["field_name"],
                 "avg_score":   round(avg_f, 2),
                 "max_score":   max_s,
-                "percentage":  round(avg_f / max_s * 100, 2),
+                "percentage":  round(avg_f / max_s * 100, 2) if max_s else 0,
                 "count":       len(field_scores),
             })
 
@@ -205,56 +228,121 @@ def _compute_failure_analysis(failure_df: pd.DataFrame, n_calls: int) -> dict:
 # ─────────────────────────── Entity Accuracy ─────────────────────
 
 def _compute_entity_accuracy(audits_df: pd.DataFrame, fields: list[dict]) -> dict:
-    # Find entity-related fields (heuristic match)
-    entity_keywords = ["entity", "capture", "name", "address", "email", "phone", "contact"]
-    entity_fields   = [
+    import json as _json
+
+    # For Convin Sense framework: parameter #3 "All required entities captured correctly?"
+    # For legacy: match by category or keyword
+    entity_keywords = ["entity", "capture", "name", "address", "email", "phone",
+                       "contact", "route", "passenger", "sailing", "date", "count"]
+    entity_fields = [
         f for f in fields
-        if any(kw in f["field_name"].lower() for kw in entity_keywords)
+        if (f.get("field_category") or "").lower() == "entity capture"
+        or any(kw in f["field_name"].lower() for kw in entity_keywords)
+        or "entities captured" in f["field_name"].lower()
     ]
 
+    empty = {"capture_rate": 0, "avg_entity_score": 0, "field_count": len(entity_fields), "field_breakdown": []}
     if not entity_fields or audits_df.empty:
-        return {"capture_rate": 0, "avg_entity_score": 0, "field_count": len(entity_fields)}
+        return empty
 
-    import json
-    entity_scores = []
-    for _, row in audits_df.iterrows():
-        fs = row.get("field_scores") or {}
-        if isinstance(fs, str):
-            fs = json.loads(fs)
-        for field in entity_fields:
-            fid = field["field_id"]
+    all_entity_scores: list[float] = []
+    field_breakdown: list[dict] = []
+
+    for field in entity_fields:
+        fid      = field["field_id"]
+        max_s    = float(field.get("weight_percent") or field.get("max_score") or 10)
+        pass_val = field.get("pass_value") or "Yes"
+        scores   = []
+        for _, row in audits_df.iterrows():
+            fs = row.get("field_scores") or {}
+            if isinstance(fs, str):
+                fs = _json.loads(fs)
             if fid in fs:
-                pct = float(fs[fid]) / float(field["max_score"])
-                entity_scores.append(pct)
+                numeric = _score_to_numeric(fs[fid], max_s, pass_val)
+                if numeric is not None:
+                    scores.append(numeric)
+                    all_entity_scores.append(numeric / max_s if max_s else 0)
 
-    if not entity_scores:
-        return {"capture_rate": 0, "avg_entity_score": 0, "field_count": len(entity_fields)}
+        if scores:
+            avg_raw = sum(scores) / len(scores)
+            pct     = round(avg_raw / max_s * 100, 2) if max_s else 0
+            field_breakdown.append({
+                "field_name":  field["field_name"],
+                "avg_score":   round(avg_raw, 2),
+                "max_score":   max_s,
+                "percentage":  pct,
+                "count":       len(scores),
+            })
 
-    capture_rate  = sum(1 for s in entity_scores if s >= 0.6) / len(entity_scores)
-    avg_entity    = sum(entity_scores) / len(entity_scores) * 100
+    if not all_entity_scores:
+        return empty
+
+    capture_rate = sum(1 for s in all_entity_scores if s >= 0.6) / len(all_entity_scores)
+    avg_entity   = sum(all_entity_scores) / len(all_entity_scores) * 100
 
     return {
-        "capture_rate":    round(capture_rate, 3),
+        "capture_rate":     round(capture_rate, 3),
         "avg_entity_score": round(avg_entity, 2),
-        "field_count":     len(entity_fields),
+        "field_count":      len(entity_fields),
+        "field_breakdown":  field_breakdown,
     }
 
 
 # ─────────────────────────── Lead Classification ─────────────────
 
-def _compute_lead_classification(calls_df: pd.DataFrame) -> dict:
+def _compute_lead_classification(calls_df: pd.DataFrame, audits_df: pd.DataFrame = None) -> dict:
     if calls_df.empty or "lead_category" not in calls_df.columns:
-        return {"distribution": {}, "hot_lead_rate": 0, "total": 0}
+        return {"distribution": {}, "hot_lead_rate": 0, "total": 0,
+                "mismatch_count": 0, "mismatch_rate": 0, "mismatch_pairs": []}
 
-    dist = calls_df["lead_category"].value_counts().to_dict()
+    dist  = calls_df["lead_category"].value_counts().to_dict()
     total = len(calls_df)
     hot   = dist.get("HOT_LEAD", 0)
 
-    return {
+    result = {
         "distribution":  {k: int(v) for k, v in dist.items()},
         "hot_lead_rate": round(hot / total, 3) if total else 0,
         "total":         total,
+        "mismatch_count": 0,
+        "mismatch_rate":  0,
+        "mismatch_pairs": [],
     }
+
+    # Compute mismatch between bot classification and auditor assessment
+    if (
+        audits_df is not None
+        and not audits_df.empty
+        and "lead_audit_category" in audits_df.columns
+        and "call_id" in audits_df.columns
+        and "call_id" in calls_df.columns
+    ):
+        merged = calls_df[["call_id", "lead_category"]].merge(
+            audits_df[["call_id", "lead_audit_category"]].dropna(subset=["lead_audit_category"]),
+            on="call_id",
+            how="inner",
+        )
+        if not merged.empty:
+            mismatches = merged[
+                merged["lead_audit_category"].notna()
+                & (merged["lead_audit_category"] != "")
+                & (merged["lead_category"] != merged["lead_audit_category"])
+            ]
+            mismatch_count = len(mismatches)
+            mismatch_rate  = round(mismatch_count / len(merged), 3) if len(merged) else 0
+
+            pairs: list[dict] = []
+            for _, row in mismatches.iterrows():
+                pairs.append({
+                    "call_id":    row["call_id"],
+                    "bot_label":  row["lead_category"],
+                    "audit_label": row["lead_audit_category"],
+                })
+
+            result["mismatch_count"] = mismatch_count
+            result["mismatch_rate"]  = mismatch_rate
+            result["mismatch_pairs"] = pairs[:20]  # cap at 20 examples
+
+    return result
 
 
 # ─────────────────────────── Conversation Analysis ───────────────

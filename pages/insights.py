@@ -203,10 +203,12 @@ def _render_insights_tab():
     with k6: kpi_card("Failure Rate",  f"{summary.get('failure_rate', 0) * 100:.0f}%",
                       color=_RED if summary.get("failure_rate", 0) > 0.3 else _AMBER)
 
+    issue_analysis = ins.get("issue_analysis", {})
+
     # ── Insights sub-tabs ─────────────────────────────────────────
-    t1, t2, t3, t4, t5, t6 = st.tabs([
+    t1, t2, t3, t4, t5, t6, t7 = st.tabs([
         "📈 QA Scores", "🤖 Bot Failures", "🎯 Lead Analysis",
-        "💬 Conversation", "🎯 Action Plan", "📄 Download Report",
+        "💬 Conversation", "🏷️ Issue Tags", "🎯 Action Plan", "📄 Download Report",
     ])
 
     # ── QA Scores ────────────────────────────────────────────────
@@ -225,12 +227,16 @@ def _render_insights_tab():
     with t4:
         _render_conversation_tab(conv)
 
-    # ── Action Plan ───────────────────────────────────────────────
+    # ── Issue Tags ────────────────────────────────────────────────
     with t5:
+        _render_issue_tag_tab(issue_analysis)
+
+    # ── Action Plan ───────────────────────────────────────────────
+    with t6:
         _render_action_plan(plan)
 
     # ── Download Report ───────────────────────────────────────────
-    with t6:
+    with t7:
         _render_report_tab(campaign, ins)
 
 
@@ -345,11 +351,14 @@ def _render_failure_tab(fails: dict):
 
 def _render_lead_tab(leads: dict, entity: dict):
     section_header("🎯 Lead Classification Analysis")
-    l1, l2, l3 = st.columns(3)
+    mismatch_rate = leads.get("mismatch_rate", 0)
+    l1, l2, l3, l4 = st.columns(4)
     with l1: kpi_card("Total Calls",    str(leads.get("total", 0)), color=_BLUE)
     with l2: kpi_card("Hot Lead Rate",  f"{leads.get('hot_lead_rate', 0) * 100:.0f}%", color=_RED)
     with l3: kpi_card("Entity Capture", f"{entity.get('capture_rate', 0) * 100:.0f}%",
                       color=_GREEN if entity.get("capture_rate", 0) >= 0.7 else _AMBER)
+    with l4: kpi_card("Lead Mismatch",  f"{mismatch_rate * 100:.0f}%",
+                      color=_RED if mismatch_rate > 0.20 else _GREEN)
 
     dist = leads.get("distribution", {})
     col_pie, col_bar = st.columns(2)
@@ -380,6 +389,129 @@ def _render_lead_tab(leads: dict, entity: dict):
             ))
             fig2.update_layout(**_layout("Lead Counts", 340), xaxis_title="Count")
             st.plotly_chart(fig2, use_container_width=True, config={"displayModeBar": False})
+
+    # ── Entity capture per-field breakdown ────────────────────────
+    entity_breakdown = entity.get("field_breakdown", [])
+    if entity_breakdown:
+        section_header("📦 Entity Capture Accuracy — Per Field")
+        e1, e2 = st.columns(2)
+        with e1:
+            df_ent = pd.DataFrame(entity_breakdown).sort_values("percentage")
+            bar_c  = [_GREEN if p >= 70 else _AMBER if p >= 50 else _RED for p in df_ent["percentage"]]
+            fig_e = go.Figure(go.Bar(
+                x=df_ent["percentage"], y=df_ent["field_name"],
+                orientation="h", marker_color=bar_c,
+                text=[f"{p:.0f}%" for p in df_ent["percentage"]],
+                textposition="inside",
+                hovertemplate="%{y}: %{x:.1f}%<extra></extra>",
+            ))
+            fig_e.add_vline(x=70, line_dash="dash", line_color=_AMBER,
+                            annotation_text="70% target")
+            fig_e.update_layout(**_layout("Entity Field Capture Rates", max(280, 60 + len(df_ent) * 45)),
+                                xaxis_range=[0, 108])
+            st.plotly_chart(fig_e, use_container_width=True, config={"displayModeBar": False})
+        with e2:
+            df_show = pd.DataFrame(entity_breakdown).sort_values("percentage", ascending=False)
+            df_show["Score %"] = df_show["percentage"].map(lambda x: f"{x:.1f}%")
+            st.dataframe(
+                df_show[["field_name", "avg_score", "max_score", "Score %", "count"]].rename(columns={
+                    "field_name": "Entity Field", "avg_score": "Avg Score",
+                    "max_score": "Max Score", "count": "Audits",
+                }),
+                use_container_width=True, hide_index=True,
+            )
+
+    # ── Lead classification mismatch details ──────────────────────
+    mismatch_pairs = leads.get("mismatch_pairs", [])
+    if mismatch_pairs:
+        section_header(f"⚠️ Lead Classification Mismatches — {leads.get('mismatch_count', 0)} calls")
+        st.markdown(
+            f"Bot and auditor disagreed on **{mismatch_rate * 100:.0f}%** of assessed calls. "
+            "Use these to retrain your lead classification model."
+        )
+        df_mm = pd.DataFrame(mismatch_pairs).rename(columns={
+            "call_id": "Call ID", "bot_label": "Bot Classification", "audit_label": "Auditor Assessment",
+        })
+        st.dataframe(df_mm, use_container_width=True, hide_index=True)
+
+
+def _render_issue_tag_tab(issue_analysis: dict):
+    section_header("🏷️ Issue Tag Analysis")
+    if not issue_analysis:
+        st.info("No issue tag data available.")
+        return
+
+    tagged = issue_analysis.get("total_tagged_calls", 0)
+    dist   = issue_analysis.get("tag_distribution", {})
+
+    it1, it2 = st.columns(2)
+    with it1: kpi_card("Calls with Issues", str(tagged), color=_AMBER)
+    with it2: kpi_card("Distinct Issue Types", str(len(dist)), color=_BLUE)
+
+    if not dist:
+        st.info("No issues were tagged in this campaign.")
+        return
+
+    st.markdown("")
+    _TAG_COLORS = {
+        "Latency":                  _AMBER,
+        "Hallucination":            _RED,
+        "STT Error":                "#8E44AD",
+        "Intent Misclassification": _BLUE,
+        "Conversation Drop":        "#E67E22",
+        "Language Switch":          "#16A085",
+    }
+
+    sorted_dist = sorted(dist.items(), key=lambda x: -x[1])
+
+    col_chart, col_table = st.columns(2)
+    with col_chart:
+        bar_colors = [_TAG_COLORS.get(k, "#95A5A6") for k, _ in sorted_dist]
+        fig = go.Figure(go.Bar(
+            x=[k for k, _ in sorted_dist],
+            y=[v for _, v in sorted_dist],
+            marker_color=bar_colors,
+            text=[v for _, v in sorted_dist],
+            textposition="outside",
+            hovertemplate="%{x}: %{y} calls<extra></extra>",
+        ))
+        fig.update_layout(**_layout("Issue Tag Distribution", 360))
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+
+    with col_table:
+        total_tags = sum(v for _, v in sorted_dist)
+        df_tags = pd.DataFrame([
+            {
+                "Issue Tag":  k,
+                "Count":      v,
+                "% of Tagged Calls": f"{v / tagged * 100:.0f}%" if tagged else "—",
+            }
+            for k, v in sorted_dist
+        ])
+        st.dataframe(df_tags, use_container_width=True, hide_index=True)
+
+    # Root cause summary for high-frequency tags
+    section_header("🔍 Root Cause Summary")
+    _ROOT_CAUSE_HINTS = {
+        "Latency":                  "High latency signals slow NLU/TTS pipelines or network issues. Profile pipeline stages and enable response streaming.",
+        "Hallucination":            "Bot provided incorrect information. Audit and constrain the knowledge base; add confidence gating on all factual responses.",
+        "STT Error":                "Speech-to-text transcription failures detected. Review STT model accuracy on this domain's vocabulary and accents.",
+        "Intent Misclassification": "Bot misunderstood customer intent multiple times. Add training utterances for misclassified intents and introduce clarification turns.",
+        "Conversation Drop":        "Calls ended abruptly without resolution. Instrument drop points and add re-engagement and graceful handoff logic.",
+        "Language Switch":          "Customer attempted to switch language but bot did not handle it. Enable automatic language detection and escalation to bilingual agents.",
+    }
+    for tag, count in sorted_dist:
+        hint = _ROOT_CAUSE_HINTS.get(tag, "Review calls tagged with this issue for patterns.")
+        color = _TAG_COLORS.get(tag, "#95A5A6")
+        st.markdown(
+            f'<div style="background:white;border-left:4px solid {color};'
+            f'padding:0.5rem 1rem;border-radius:0 8px 8px 0;margin:4px 0;'
+            f'box-shadow:0 1px 4px rgba(0,0,0,0.05);">'
+            f'<b style="color:{color};">🏷️ {tag}</b> '
+            f'<span style="color:#7F8C8D;font-size:0.78rem;">({count} call{"s" if count != 1 else ""})</span><br>'
+            f'<span style="font-size:0.87rem;">{hint}</span></div>',
+            unsafe_allow_html=True,
+        )
 
 
 def _render_conversation_tab(conv: dict):

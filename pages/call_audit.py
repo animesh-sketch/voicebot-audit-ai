@@ -9,7 +9,10 @@ from database.db_manager import (
     get_call, get_template_fields, submit_audit, get_audit_for_call,
     get_failures_for_call, get_campaign_progress, update_call_lead_category,
 )
-from database.models import LeadCategory, IssueTag, CampaignStatus, FAILURE_TYPE_COLORS
+from database.models import (
+    LeadCategory, IssueTag, CampaignStatus, FAILURE_TYPE_COLORS, FieldCategory,
+    CONVIN_SENSE_PASS_THRESHOLD,
+)
 from utils import (
     page_header, section_header, kpi_card, badge, progress_bar,
     info_banner, nav, finding_card,
@@ -26,6 +29,34 @@ _ISSUE_TAG_COLORS = {
     "STT Error":                "#8E44AD",
     "Intent Misclassification": "#2980B9",
     "Conversation Drop":        "#E67E22",
+    "Language Switch":          "#16A085",
+}
+
+_CAT_COLORS = {
+    "AI Issues":            "#E74C3C",
+    "Entity Capture":       "#2980B9",
+    "Lead Classification":  "#27AE60",
+    "Call Quality":         "#F39C12",
+    "Compliance":           "#8E44AD",
+    "General":              "#7F8C8D",
+}
+
+_TIER_COLORS = {
+    "CRITICAL":  "#E74C3C",
+    "IMPORTANT": "#E67E22",
+    "QUALITY":   "#8E44AD",
+}
+_TIER_LABELS = {
+    "CRITICAL":  "🔴 TIER 1 — CRITICAL  (65% weight)",
+    "IMPORTANT": "🟠 TIER 2 — IMPORTANT  (25% weight)",
+    "QUALITY":   "🟣 TIER 3 — QUALITY  (10% weight + FATAL checks)",
+}
+_TIER_ORDER = ["CRITICAL", "IMPORTANT", "QUALITY"]
+
+_RESP_OPTIONS = {
+    "YES_NO":    ["Yes", "No"],
+    "YES_NO_NA": ["Yes", "No", "NA"],
+    "NO_FATAL":  ["No", "FATAL"],
 }
 
 
@@ -142,7 +173,7 @@ def _render_call_explorer(calls: list, campaign_id: str):
                     st.caption(f"by {c['auditor_name']}")
             with col5:
                 if score_pct is not None:
-                    color = _GREEN if score_pct >= 70 else (_AMBER if score_pct >= 50 else _RED)
+                    color = _GREEN if score_pct >= CONVIN_SENSE_PASS_THRESHOLD else (_AMBER if score_pct >= 60 else _RED)
                     st.markdown(
                         f"<b style='font-size:1.2rem;color:{color};'>{score_pct:.1f}%</b>",
                         unsafe_allow_html=True,
@@ -276,32 +307,261 @@ def _render_audit_form(calls: list, campaign_id: str, campaign: dict, fields: li
 
     # ── Audit form ────────────────────────────────────────────────
     st.markdown("---")
-    section_header("📊 Scoring Scorecard")
+    section_header("📊 Convin Sense Audit Scorecard  (v0.3)")
 
     auditor_name = st.text_input("Auditor Name", value=st.session_state.get("auditor_name", "QA Auditor"))
     st.session_state["auditor_name"] = auditor_name
 
+    # Detect whether this template uses the new Convin Sense framework
+    uses_convin_sense = any(f.get("tier") == "CRITICAL" for f in fields)
+
+    if uses_convin_sense:
+        _render_convin_sense_form(
+            call_id, campaign_id, auditor_name, fields, existing_audit
+        )
+    else:
+        _render_legacy_form(
+            call_id, campaign_id, auditor_name, fields, existing_audit
+        )
+
+
+def _render_convin_sense_form(
+    call_id: str, campaign_id: str, auditor_name: str,
+    fields: list, existing_audit: dict | None,
+):
+    """Tier-based Yes/No scorecard for Convin Sense Audit Framework v0.3."""
+    from collections import defaultdict
+
+    # Group fields by tier
+    fields_by_tier: dict = defaultdict(list)
+    for f in fields:
+        t = f.get("tier") or "IMPORTANT"
+        fields_by_tier[t].append(f)
+
+    with st.form(f"audit_form_cs_{call_id}"):
+        answers: dict  = {}
+        earned_w       = 0.0
+        total_w        = 0.0
+        fatal_hit      = False
+
+        for tier in _TIER_ORDER:
+            tier_fields = fields_by_tier.get(tier, [])
+            if not tier_fields:
+                continue
+
+            color = _TIER_COLORS[tier]
+            label = _TIER_LABELS[tier]
+            st.markdown(
+                f'<div style="background:{color}18;border-left:4px solid {color};'
+                f'padding:0.4rem 1rem;border-radius:0 8px 8px 0;margin:1rem 0 0.4rem;'
+                f'font-weight:700;font-size:0.88rem;color:{color};">'
+                f'{label}</div>',
+                unsafe_allow_html=True,
+            )
+
+            for field in tier_fields:
+                fid       = field["field_id"]
+                weight    = float(field.get("weight_percent") or 0)
+                is_fatal  = bool(int(field.get("is_fatal") or 0))
+                pass_val  = field.get("pass_value") or "Yes"
+                resp_type = field.get("response_type") or "YES_NO"
+                options   = _RESP_OPTIONS.get(resp_type, ["Yes", "No"])
+
+                # Previous answer
+                prev_answer = options[0]
+                if existing_audit:
+                    saved = existing_audit["field_scores"].get(fid)
+                    if saved in options:
+                        prev_answer = saved
+
+                # Build label with weight / FATAL badge
+                if is_fatal:
+                    param_label = (
+                        f'**#{field.get("no", "")} {field["field_name"]}**  '
+                        f'<span style="background:#E74C3C;color:white;padding:1px 8px;'
+                        f'border-radius:4px;font-size:0.72rem;font-weight:700;">⛔ FATAL</span>'
+                    )
+                    st.markdown(param_label, unsafe_allow_html=True)
+                else:
+                    param_label = (
+                        f'**#{field.get("no", "")} {field["field_name"]}**  '
+                        f'`{weight:.0f}%`'
+                    )
+                    st.markdown(param_label, unsafe_allow_html=True)
+
+                answer = st.radio(
+                    f"ans_{fid}",
+                    options,
+                    index=options.index(prev_answer) if prev_answer in options else 0,
+                    horizontal=True,
+                    key=f"ans_{fid}_{call_id}",
+                    label_visibility="collapsed",
+                )
+                answers[fid] = answer
+
+                # Contribute to live score
+                if is_fatal:
+                    if answer != pass_val:
+                        fatal_hit = True
+                else:
+                    if answer != "NA":
+                        total_w += weight
+                        if answer == pass_val:
+                            earned_w += weight
+
+                st.markdown('<div style="margin-bottom:0.3rem;"></div>', unsafe_allow_html=True)
+
+        # ── Live score banner ─────────────────────────────────────
+        st.markdown("---")
+        if fatal_hit:
+            st.markdown(
+                '<div style="background:#FDEDEC;border:2px solid #E74C3C;border-radius:8px;'
+                'padding:0.7rem 1.2rem;margin:0.5rem 0;">'
+                '<b style="color:#E74C3C;font-size:1.1rem;">⛔ FATAL AUTO-FAIL — One or more FATAL '
+                'parameters triggered. Audit is an automatic FAIL regardless of score.</b></div>',
+                unsafe_allow_html=True,
+            )
+            live_pct = 0.0
+            verdict  = "FAIL ❌ (FATAL)"
+            score_color = _RED
+        else:
+            live_pct    = round(earned_w / total_w * 100, 1) if total_w else 0.0
+            pass_thresh = CONVIN_SENSE_PASS_THRESHOLD
+            if live_pct >= pass_thresh:
+                verdict     = f"PASS ✅  (≥ {pass_thresh:.0f}%)"
+                score_color = _GREEN
+            elif live_pct >= 60:
+                verdict     = "FAIL ⚠️"
+                score_color = _AMBER
+            else:
+                verdict     = "FAIL ❌"
+                score_color = _RED
+
+        st.markdown(
+            f'<div style="background:{score_color}22;border:1px solid {score_color};'
+            f'border-radius:8px;padding:0.6rem 1.2rem;margin:0.3rem 0;">'
+            f'<b style="color:{score_color};font-size:1.15rem;">'
+            f'Projected Score: {live_pct:.1f}%  —  {verdict}</b>'
+            f'<span style="color:#7F8C8D;font-size:0.82rem;margin-left:1rem;">'
+            f'({earned_w:.1f} / {total_w:.1f} weighted pts)</span></div>',
+            unsafe_allow_html=True,
+        )
+
+        st.markdown("---")
+        # ── Auditor lead assessment ────────────────────────────────
+        lead_cats = [""] + [e.value for e in LeadCategory]
+        existing_lac = (existing_audit or {}).get("lead_audit_category") or ""
+        default_lac_idx = lead_cats.index(existing_lac) if existing_lac in lead_cats else 0
+        lead_audit_cat = st.selectbox(
+            "🎯 Auditor Lead Assessment  *(your classification)*",
+            lead_cats,
+            index=default_lac_idx,
+            format_func=lambda x: "— Not assessed —" if x == "" else x,
+            key=f"lac_{call_id}",
+        )
+
+        # ── Issue tags ─────────────────────────────────────────────
+        st.markdown("**🏷️ Issue Tags** *(select all that apply)*")
+        issue_tags = []
+        tag_list   = list(IssueTag)
+        tag_cols   = st.columns(len(tag_list))
+        for i, tag in enumerate(tag_list):
+            prev_tags = existing_audit["issue_tags"] if existing_audit else []
+            if tag_cols[i].checkbox(
+                tag.value,
+                value=(tag.value in prev_tags),
+                key=f"tag_{tag.value}_{call_id}",
+            ):
+                issue_tags.append(tag.value)
+
+        notes = st.text_area(
+            "📝 Auditor Notes",
+            value=existing_audit["notes"] if existing_audit else "",
+            placeholder="e.g. NBA not triggered. Context lost at turn 4. WhatsApp delivery failure observed.",
+            height=90,
+        )
+
+        c1, c2 = st.columns(2)
+        with c1:
+            submitted = st.form_submit_button("✅ Submit Audit", type="primary", use_container_width=True)
+        with c2:
+            st.form_submit_button("Clear Form", use_container_width=True)
+
+        if submitted:
+            if not auditor_name.strip():
+                st.error("Auditor name is required.")
+            elif not answers:
+                st.error("No answers to save.")
+            else:
+                submit_audit(
+                    call_id=call_id,
+                    campaign_id=campaign_id,
+                    auditor_name=auditor_name.strip(),
+                    field_scores=answers,
+                    issue_tags=issue_tags,
+                    notes=notes,
+                    lead_audit_category=lead_audit_cat if lead_audit_cat else None,
+                )
+                audit  = get_audit_for_call(call_id)
+                pct    = audit["percentage_score"] if audit else 0
+                is_ff  = bool((audit or {}).get("fatal_triggered", 0))
+                if is_ff:
+                    st.error(f"⛔ FATAL FAIL — Score: **{pct:.1f}%**")
+                elif pct >= CONVIN_SENSE_PASS_THRESHOLD:
+                    st.success(f"✅ Audit submitted! Score: **{pct:.1f}%** (PASS)")
+                    st.balloons()
+                else:
+                    st.warning(
+                        f"⚠️ Audit submitted! Score: **{pct:.1f}%** "
+                        f"(FAIL — below {CONVIN_SENSE_PASS_THRESHOLD:.0f}% threshold)"
+                    )
+                st.session_state["audit_call_id"] = None
+                st.rerun()
+
+
+def _render_legacy_form(
+    call_id: str, campaign_id: str, auditor_name: str,
+    fields: list, existing_audit: dict | None,
+):
+    """Legacy numeric slider scorecard for older campaigns."""
+    from collections import defaultdict
+
     total_max = sum(f["max_score"] for f in fields)
+    fields_by_cat: dict = defaultdict(list)
+    for f in fields:
+        cat = f.get("field_category") or "General"
+        fields_by_cat[cat].append(f)
 
-    with st.form(f"audit_form_{call_id}"):
+    with st.form(f"audit_form_leg_{call_id}"):
         scores: dict = {}
-        live_total = 0.0
+        live_total   = 0.0
 
-        for field in fields:
-            fid   = field["field_id"]
-            max_s = field["max_score"]
-            weight = round(max_s / total_max * 100, 1) if total_max else 0
-            prev   = (
-                float(existing_audit["field_scores"].get(fid, max_s / 2))
-                if existing_audit else max_s / 2
+        for cat, cat_fields in fields_by_cat.items():
+            color = _CAT_COLORS.get(cat, "#7F8C8D")
+            st.markdown(
+                f'<div style="background:{color}18;border-left:3px solid {color};'
+                f'padding:0.25rem 0.8rem;border-radius:0 6px 6px 0;margin:0.6rem 0 0.2rem;'
+                f'font-weight:600;font-size:0.83rem;color:{color};">'
+                f'🏷️ {cat}</div>',
+                unsafe_allow_html=True,
             )
-            score = st.slider(
-                f"{field['field_name']}  *(max {max_s:.0f} pts, {weight:.0f}% weight)*",
-                0.0, max_s, prev, 0.5,
-                key=f"sf_{fid}_{call_id}",
-            )
-            scores[fid] = score
-            live_total += score
+            for field in cat_fields:
+                fid   = field["field_id"]
+                max_s = field["max_score"]
+                weight = round(max_s / total_max * 100, 1) if total_max else 0
+                prev   = (
+                    float(existing_audit["field_scores"].get(fid, max_s / 2))
+                    if existing_audit and isinstance(
+                        existing_audit["field_scores"].get(fid), (int, float))
+                    else max_s / 2
+                )
+                score = st.slider(
+                    f"{field['field_name']}  *(max {max_s:.0f} pts · {weight:.0f}% weight)*",
+                    0.0, max_s, prev, 0.5,
+                    key=f"sf_{fid}_{call_id}",
+                )
+                scores[fid] = score
+                live_total += score
 
         live_pct = live_total / total_max * 100 if total_max else 0
         score_color = _GREEN if live_pct >= 70 else (_AMBER if live_pct >= 50 else _RED)
@@ -314,23 +574,34 @@ def _render_audit_form(calls: list, campaign_id: str, campaign: dict, fields: li
         )
 
         st.markdown("---")
+        lead_cats = [""] + [e.value for e in LeadCategory]
+        existing_lac = (existing_audit or {}).get("lead_audit_category") or ""
+        default_lac_idx = lead_cats.index(existing_lac) if existing_lac in lead_cats else 0
+        lead_audit_cat = st.selectbox(
+            "🎯 Auditor Lead Assessment",
+            lead_cats,
+            index=default_lac_idx,
+            format_func=lambda x: "— Not assessed —" if x == "" else x,
+            key=f"lac_{call_id}",
+        )
+
         st.markdown("**🏷️ Issue Tags** *(select all that apply)*")
         issue_tags = []
-        tag_cols = st.columns(len(list(IssueTag)))
-        for i, tag in enumerate(IssueTag):
+        tag_list   = list(IssueTag)
+        tag_cols   = st.columns(len(tag_list))
+        for i, tag in enumerate(tag_list):
             prev_tags = existing_audit["issue_tags"] if existing_audit else []
-            checked = tag_cols[i].checkbox(
+            if tag_cols[i].checkbox(
                 tag.value,
                 value=(tag.value in prev_tags),
                 key=f"tag_{tag.value}_{call_id}",
-            )
-            if checked:
+            ):
                 issue_tags.append(tag.value)
 
         notes = st.text_area(
             "📝 Auditor Notes",
             value=existing_audit["notes"] if existing_audit else "",
-            placeholder="e.g. Bot failed to capture customer's email. Latency noticed in turns 3–5.",
+            placeholder="e.g. Bot failed to capture sailing date. Language switch not handled.",
             height=90,
         )
 
@@ -346,17 +617,17 @@ def _render_audit_form(calls: list, campaign_id: str, campaign: dict, fields: li
             elif not scores:
                 st.error("No scores to save.")
             else:
-                result = submit_audit(
+                submit_audit(
                     call_id=call_id,
                     campaign_id=campaign_id,
                     auditor_name=auditor_name.strip(),
                     field_scores=scores,
                     issue_tags=issue_tags,
                     notes=notes,
+                    lead_audit_category=lead_audit_cat if lead_audit_cat else None,
                 )
-                pct = result  # audit_id is returned, need to re-fetch
                 audit = get_audit_for_call(call_id)
-                pct = audit["percentage_score"] if audit else 0
+                pct   = audit["percentage_score"] if audit else 0
                 if pct >= 70:
                     st.success(f"✅ Audit submitted! Score: **{pct:.1f}%** (PASS)")
                     st.balloons()
